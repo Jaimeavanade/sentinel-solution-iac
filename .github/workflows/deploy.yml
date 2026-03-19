@@ -2,23 +2,6 @@ name: Deploy Log Analytics + Sentinel + Solutions
 
 on:
   workflow_dispatch:
-    inputs:
-      action:
-        description: "Acción a ejecutar"
-        required: true
-        default: "deploy"
-        type: choice
-        options:
-          - deploy
-          - reinstall-solutions
-      solutions:
-        description: "CSV de displayName a reinstalar (vacío = todas). Ej: Microsoft Defender XDR, Azure Activity"
-        required: false
-        default: ""
-      includePreview:
-        description: "Incluir soluciones Preview (true/false)"
-        required: false
-        default: "false"
 
 permissions:
   id-token: write
@@ -28,7 +11,6 @@ jobs:
   deploy:
     name: Deploy RG + LAW + Sentinel + Solutions
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.action == 'deploy' }}
 
     steps:
       - name: Checkout
@@ -43,7 +25,7 @@ jobs:
           audience: api://AzureADTokenExchange
           enable-AzPSSession: true
 
-      # 1) RG con tags
+      # 1) Create RG with tags
       - name: Create Resource Group (with Tags)
         uses: azure/cli@v2
         with:
@@ -64,8 +46,8 @@ jobs:
               "Versión=1.0.0" \
               "Descripción=Monitorización Sentinel"
 
-      # 2) Deploy LAW + Sentinel solution (Bicep) con tags
-      - name: Deploy Log Analytics Workspace + Sentinel Solution (Bicep)
+      # 2) Deploy LAW + (opcional) Sentinel Solution via Bicep with tags param
+      - name: Deploy Log Analytics Workspace (Bicep)
         uses: azure/cli@v2
         with:
           inlineScript: |
@@ -92,7 +74,7 @@ jobs:
                 retentionInDays=${{ vars.RETENTION_DAYS }} \
                 tags="$TAGS_JSON"
 
-      # 3) Onboard Sentinel (mantengo tu script)
+      # 3) Onboard Sentinel (tu método actual)
       - name: Onboard Sentinel
         uses: azure/powershell@v2
         with:
@@ -106,7 +88,38 @@ jobs:
               -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}"
 
-      # 4) ✅ Install Sentinel Solutions (Content Hub)  ← ESTE ES EL PASO QUE TE DEVUELVE LAS SOLUCIONES
+      # 4) ✅ FORCE TAGS on SecurityInsights(<workspace>) solution (porque desde Bicep no siempre se refleja)
+      - name: Force Tags on Sentinel Solution (SecurityInsights)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            # Obtener el resourceId de la Solution
+            SOLUTION_ID=$(az resource show \
+              --resource-group "${{ vars.RESOURCE_GROUP }}" \
+              --resource-type "Microsoft.OperationsManagement/solutions" \
+              --name "SecurityInsights(${{ vars.WORKSPACE_NAME }})" \
+              --query id -o tsv)
+
+            echo "Solution resourceId: $SOLUTION_ID"
+
+            # Aplicar tags (Merge) sobre el recurso
+            az tag update \
+              --resource-id "$SOLUTION_ID" \
+              --operation Merge \
+              --tags \
+              "Entorno=PRO" \
+              "Plataforma=GLB" \
+              "Producto=SEN" \
+              "Criticidad=Alta" \
+              "Responsable del Coste=Roberto Gonzalez Marquez <roberto.gonzalez@segittur.es>" \
+              "Centro Coste=7027084" \
+              "Responsable del producto=PIA-SEGITTUR" \
+              "Sensibilidad=Confidencial" \
+              "Retención=2 años" \
+              "Versión=1.0.0" \
+              "Descripción=Monitorización Sentinel"
+
+      # 5) Install Sentinel Solutions (Content Hub) - vuelve a funcionar el contenido
       - name: Install Sentinel Solutions (Content Hub)
         uses: azure/powershell@v2
         with:
@@ -120,52 +133,3 @@ jobs:
               -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
               -SolutionsCsv "${{ vars.SENTINEL_SOLUTIONS }}"
-
-      # 5) (Opcional) Listado rápido de soluciones instaladas para comprobar que vuelven a aparecer
-      - name: Debug - List installed Content Hub solutions
-        uses: azure/cli@v2
-        with:
-          inlineScript: |
-            SUB_ID=$(az account show --query id -o tsv)
-            az rest --method get \
-              --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.OperationalInsights/workspaces/${{ vars.WORKSPACE_NAME }}/providers/Microsoft.SecurityInsights/contentPackages?api-version=2025-09-01" \
-              --query "value[].properties.displayName" -o tsv
-
-  reinstall_solutions:
-    name: Reinstall Content Hub Solutions
-    runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.action == 'reinstall-solutions' }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-          enable-AzPSSession: true
-
-      - name: Reinstall solutions (Content Hub)
-        uses: azure/powershell@v2
-        with:
-          azPSVersion: "latest"
-          errorActionPreference: "Stop"
-          inlineScript: |
-            $ErrorActionPreference = "Stop"
-            Set-AzContext -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" | Out-Null
-
-            $solutionsCsv = "${{ github.event.inputs.solutions }}"
-            $solutionList = @()
-            if ($solutionsCsv -and $solutionsCsv.Trim().Length -gt 0) {
-              $solutionList = $solutionsCsv.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
-            }
-
-            & "${{ github.workspace }}/scripts/03-reinstall-contenthub-solutions.ps1" `
-              -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
-              -ResourceGroupName "${{ vars.RESOURCE_GROUP }}" `
-              -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
-              -SolutionDisplayName $solutionList
