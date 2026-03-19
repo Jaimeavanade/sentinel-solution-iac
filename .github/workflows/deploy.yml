@@ -43,9 +43,7 @@ jobs:
           audience: api://AzureADTokenExchange
           enable-AzPSSession: true
 
-      # ----------------------------
-      # 1) Create Resource Group (CON TAGS)
-      # ----------------------------
+      # 1) RG con tags
       - name: Create Resource Group (with Tags)
         uses: azure/cli@v2
         with:
@@ -66,10 +64,8 @@ jobs:
               "Versión=1.0.0" \
               "Descripción=Monitorización Sentinel"
 
-      # ----------------------------
-      # 2) Deploy Log Analytics Workspace (Bicep) + Tags
-      # ----------------------------
-      - name: Deploy Log Analytics Workspace (Bicep)
+      # 2) Deploy LAW + Sentinel solution (Bicep) con tags
+      - name: Deploy Log Analytics Workspace + Sentinel Solution (Bicep)
         uses: azure/cli@v2
         with:
           inlineScript: |
@@ -96,9 +92,7 @@ jobs:
                 retentionInDays=${{ vars.RETENTION_DAYS }} \
                 tags="$TAGS_JSON"
 
-      # ----------------------------
-      # 3) Onboard Sentinel (PowerShell)
-      # ----------------------------
+      # 3) Onboard Sentinel (mantengo tu script)
       - name: Onboard Sentinel
         uses: azure/powershell@v2
         with:
@@ -112,8 +106,33 @@ jobs:
               -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}"
 
+      # 4) ✅ Install Sentinel Solutions (Content Hub)  ← ESTE ES EL PASO QUE TE DEVUELVE LAS SOLUCIONES
+      - name: Install Sentinel Solutions (Content Hub)
+        uses: azure/powershell@v2
+        with:
+          azPSVersion: "latest"
+          errorActionPreference: "Stop"
+          inlineScript: |
+            $ErrorActionPreference = "Stop"
+            Set-AzContext -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" | Out-Null
+
+            & "${{ github.workspace }}/scripts/02-install-solutions.ps1" `
+              -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
+              -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
+              -SolutionsCsv "${{ vars.SENTINEL_SOLUTIONS }}"
+
+      # 5) (Opcional) Listado rápido de soluciones instaladas para comprobar que vuelven a aparecer
+      - name: Debug - List installed Content Hub solutions
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            SUB_ID=$(az account show --query id -o tsv)
+            az rest --method get \
+              --url "https://management.azure.com/subscriptions/$SUB_ID/resourceGroups/${{ vars.RESOURCE_GROUP }}/providers/Microsoft.OperationalInsights/workspaces/${{ vars.WORKSPACE_NAME }}/providers/Microsoft.SecurityInsights/contentPackages?api-version=2025-09-01" \
+              --query "value[].properties.displayName" -o tsv
+
   reinstall_solutions:
-    name: Reinstall Solutions (Content Hub)
+    name: Reinstall Content Hub Solutions
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.action == 'reinstall-solutions' }}
 
@@ -130,7 +149,7 @@ jobs:
           audience: api://AzureADTokenExchange
           enable-AzPSSession: true
 
-      - name: Reinstall Content Hub Solutions
+      - name: Reinstall solutions (Content Hub)
         uses: azure/powershell@v2
         with:
           azPSVersion: "latest"
@@ -140,15 +159,13 @@ jobs:
             Set-AzContext -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" | Out-Null
 
             $solutionsCsv = "${{ github.event.inputs.solutions }}"
-            $solutions = @()
+            $solutionList = @()
             if ($solutionsCsv -and $solutionsCsv.Trim().Length -gt 0) {
-              $solutions = $solutionsCsv.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+              $solutionList = $solutionsCsv.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
             }
-
-            $includePreview = "${{ github.event.inputs.includePreview }}"
 
             & "${{ github.workspace }}/scripts/03-reinstall-contenthub-solutions.ps1" `
               -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
               -ResourceGroupName "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
-              -SolutionDisplayName $solutions
+              -SolutionDisplayName $solutionList
