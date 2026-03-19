@@ -1,7 +1,24 @@
-name: Deploy Sentinel Lab (RG + LAW + Sentinel + Content Hub Solutions)
+name: Deploy Log Analytics + Sentinel + Solutions
 
 on:
   workflow_dispatch:
+    inputs:
+      action:
+        description: "Acción a ejecutar"
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - reinstall-solutions
+      solutions:
+        description: "CSV de displayName a reinstalar (vacío = todas). Ej: Microsoft Defender XDR, Azure Activity"
+        required: false
+        default: ""
+      includePreview:
+        description: "Incluir soluciones Preview (true/false)"
+        required: false
+        default: "false"
 
 permissions:
   id-token: write
@@ -9,7 +26,9 @@ permissions:
 
 jobs:
   deploy:
+    name: Deploy RG + LAW + Sentinel + Solutions
     runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'deploy' }}
 
     steps:
       - name: Checkout
@@ -24,25 +43,62 @@ jobs:
           audience: api://AzureADTokenExchange
           enable-AzPSSession: true
 
-      - name: Create Resource Group
+      # ----------------------------
+      # 1) Create Resource Group (CON TAGS)
+      # ----------------------------
+      - name: Create Resource Group (with Tags)
         uses: azure/cli@v2
         with:
           inlineScript: |
             az group create \
               --name "${{ vars.RESOURCE_GROUP }}" \
-              --location "${{ vars.LOCATION }}"
+              --location "${{ vars.LOCATION }}" \
+              --tags \
+              "Entorno=PRO" \
+              "Plataforma=GLB" \
+              "Producto=SEN" \
+              "Criticidad=Alta" \
+              "Responsable del Coste=Roberto Gonzalez Marquez <roberto.gonzalez@segittur.es>" \
+              "Centro Coste=7027084" \
+              "Responsable del producto=PIA-SEGITTUR" \
+              "Sensibilidad=Confidencial" \
+              "Retención=2 años" \
+              "Versión=1.0.0" \
+              "Descripción=Monitorización Sentinel"
 
+      # ----------------------------
+      # 2) Deploy Log Analytics Workspace (Bicep) + Tags
+      # ----------------------------
       - name: Deploy Log Analytics Workspace (Bicep)
         uses: azure/cli@v2
         with:
           inlineScript: |
+            TAGS_JSON='{
+              "Entorno":"PRO",
+              "Plataforma":"GLB",
+              "Producto":"SEN",
+              "Criticidad":"Alta",
+              "Responsable del Coste":"Roberto Gonzalez Marquez <roberto.gonzalez@segittur.es>",
+              "Centro Coste":"7027084",
+              "Responsable del producto":"PIA-SEGITTUR",
+              "Sensibilidad":"Confidencial",
+              "Retención":"2 años",
+              "Versión":"1.0.0",
+              "Descripción":"Monitorización Sentinel"
+            }'
+
             az deployment group create \
               --resource-group "${{ vars.RESOURCE_GROUP }}" \
               --template-file "infra/main.bicep" \
-              --parameters location="${{ vars.LOCATION }}" \
-                          workspaceName="${{ vars.WORKSPACE_NAME }}" \
-                          retentionInDays=${{ vars.RETENTION_DAYS }}
+              --parameters \
+                location="${{ vars.LOCATION }}" \
+                workspaceName="${{ vars.WORKSPACE_NAME }}" \
+                retentionInDays=${{ vars.RETENTION_DAYS }} \
+                tags="$TAGS_JSON"
 
+      # ----------------------------
+      # 3) Onboard Sentinel (PowerShell)
+      # ----------------------------
       - name: Onboard Sentinel
         uses: azure/powershell@v2
         with:
@@ -54,10 +110,27 @@ jobs:
 
             & "${{ github.workspace }}/scripts/01-onboard-sentinel.ps1" `
               -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
-              -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
-              -MaxWaitSeconds 180
+              -WorkspaceName "${{ vars.WORKSPACE_NAME }}"
 
-      - name: Install Content Hub Solutions (by contentId)
+  reinstall_solutions:
+    name: Reinstall Solutions (Content Hub)
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.action == 'reinstall-solutions' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+          enable-AzPSSession: true
+
+      - name: Reinstall Content Hub Solutions
         uses: azure/powershell@v2
         with:
           azPSVersion: "latest"
@@ -66,7 +139,16 @@ jobs:
             $ErrorActionPreference = "Stop"
             Set-AzContext -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" | Out-Null
 
-            & "${{ github.workspace }}/scripts/02-install-solutions.ps1" `
-              -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
+            $solutionsCsv = "${{ github.event.inputs.solutions }}"
+            $solutions = @()
+            if ($solutionsCsv -and $solutionsCsv.Trim().Length -gt 0) {
+              $solutions = $solutionsCsv.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" }
+            }
+
+            $includePreview = "${{ github.event.inputs.includePreview }}"
+
+            & "${{ github.workspace }}/scripts/03-reinstall-contenthub-solutions.ps1" `
+              -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+              -ResourceGroupName "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
-              -SolutionsCsv "${{ vars.SENTINEL_SOLUTIONS }}"
+              -SolutionDisplayName $solutions
