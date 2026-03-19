@@ -1,14 +1,11 @@
-@description('Ubicación de despliegue (ej: westeurope)')
+@description('Ubicación del despliegue')
 param location string
 
 @description('Nombre del Log Analytics Workspace')
 param workspaceName string
 
-@description('Retención en días para Log Analytics (máx 730 = 2 años)')
+@description('Retención en días (730 = 2 años)')
 param retentionInDays int = 730
-
-@description('Tags corporativos a aplicar al Log Analytics Workspace')
-param tags object
 
 @description('SKU del Log Analytics Workspace')
 @allowed([
@@ -17,24 +14,20 @@ param tags object
 ])
 param skuName string = 'PerGB2018'
 
-@description('Límite de ingesta diaria (GB). 0 desactiva el cap.')
-param dailyQuotaGb int = 0
+@description('Tags corporativos')
+param tags object
 
-resource law 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: workspaceName
   location: location
   tags: tags
   properties: {
-    retentionInDays: retentionInDays
     sku: {
       name: skuName
     }
-    workspaceCapping: {
-      dailyQuotaGb: dailyQuotaGb
-    }
+    retentionInDays: retentionInDays
   }
 }
 
-output workspaceResourceId string = law.id
-output workspaceNameOut string = law.name
-``
+output workspaceId string = logAnalyticsWorkspace.id
+output workspaceNameOut string = logAnalyticsWorkspace.name
