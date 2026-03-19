@@ -14,7 +14,7 @@ param retentionInDays int = 730
 ])
 param skuName string = 'PerGB2018'
 
-@description('Tags corporativos')
+@description('Tags corporativos (se aplican a LAW y a la Solución de Sentinel)')
 param tags object
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
@@ -29,5 +29,24 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10
   }
 }
 
+//
+// ✅ Solución “SecurityInsights(<workspace>)” (Microsoft Sentinel legacy solution resource)
+//    Aquí es donde quieres ver también las tags.
+//
+resource sentinelSolution 'Microsoft.OperationsManagement/solutions@2015-11-01-preview' = {
+  name: 'SecurityInsights(${workspaceName})'
+  location: location
+  tags: tags
+  properties: {
+    workspaceResourceId: logAnalyticsWorkspace.id
+  }
+  plan: {
+    name: 'SecurityInsights(${workspaceName})'
+    product: 'OMSGallery/SecurityInsights'
+    publisher: 'Microsoft'
+    promotionCode: ''
+  }
+}
+
 output workspaceId string = logAnalyticsWorkspace.id
-output workspaceNameOut string = logAnalyticsWorkspace.name
+output sentinelSolutionId string = sentinelSolution.id
