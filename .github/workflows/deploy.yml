@@ -25,7 +25,26 @@ jobs:
           audience: api://AzureADTokenExchange
           enable-AzPSSession: true
 
-
+ # 1) Create RG with tags
+      - name: Create Resource Group (with Tags)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az group create \
+              --name "${{ vars.RESOURCE_GROUP }}" \
+              --location "${{ vars.LOCATION }}" \
+              --tags \
+              "Entorno=PRO" \
+              "Plataforma=GLB" \
+              "Producto=SEN" \
+              "Criticidad=Alta" \
+              "Responsable del Coste=Roberto Gonzalez Marquez <roberto.gonzalez@segittur.es>" \
+              "Centro Coste=7027084" \
+              "Responsable del producto=PIA-SEGITTUR" \
+              "Sensibilidad=Confidencial" \
+              "Retención=2 años" \
+              "Versión=1.0.0" \
+              "Descripción=Monitorización Sentinel"
 
       # 2) Deploy LAW + (opcional) Sentinel Solution via Bicep with tags param
       - name: Deploy Log Analytics Workspace (Bicep)
