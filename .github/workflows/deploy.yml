@@ -133,3 +133,4 @@ jobs:
               -ResourceGroup "${{ vars.RESOURCE_GROUP }}" `
               -WorkspaceName "${{ vars.WORKSPACE_NAME }}" `
               -SolutionsCsv "${{ vars.SENTINEL_SOLUTIONS }}"
+''
